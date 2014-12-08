@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2013 STMicroelectronics
+ * Copyright (C) 2014 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -31,6 +31,8 @@
 #include <talloc.h>       /* talloc*, */
 #include <uthash.h>       /* ut*, UT*, HASH*, */
 #include <sys/queue.h>    /* STAILQ_*, */
+#include <inttypes.h>     /* PRI*, */
+#include <linux/auxvec.h> /* AT_*, */
 
 #include "extension/care/care.h"
 #include "extension/care/final.h"
@@ -38,10 +40,11 @@
 #include "extension/extension.h"
 #include "tracee/tracee.h"
 #include "tracee/mem.h"
+#include "execve/auxv.h"
 #include "path/canon.h"
 #include "path/path.h"
 #include "path/binding.h"
-#include "cli/notice.h"
+#include "cli/note.h"
 
 /* Make uthash use talloc.  */
 #undef  uthash_malloc
@@ -78,7 +81,7 @@ Item *queue_item(TALLOC_CTX *context, List **list, const char *value)
 		return NULL;
 
 	item->load = talloc_strdup(item, value);
-	if (item == NULL)
+	if (item->load == NULL)
 		return NULL;
 
 	STAILQ_INSERT_TAIL(*list, item, link);
@@ -96,18 +99,24 @@ static void generate_output_name(const Tracee *tracee, Care *care)
 	flat_time = time(NULL);
 	splitted_time = localtime(&flat_time);
 	if (splitted_time == NULL) {
-		notice(tracee, ERROR, INTERNAL,
+		note(tracee, ERROR, INTERNAL,
 			"can't generate a valid output name from the current time, "
 			"please specify an ouput name explicitly");
 		return;
 	}
 
-	care->output = talloc_asprintf(care, "care-%02d%02d%02d%02d%02d%02d.cpio",
+	care->output = talloc_asprintf(care, "care-%02d%02d%02d%02d%02d%02d.%s",
 					splitted_time->tm_year - 100, splitted_time->tm_mon + 1,
 					splitted_time->tm_mday, splitted_time->tm_hour,
-					splitted_time->tm_min, splitted_time->tm_sec);
+					splitted_time->tm_min, splitted_time->tm_sec,
+#if defined(CARE_BINARY_IS_PORTABLE)
+					"bin"
+#else
+					"raw"
+#endif
+		);
 	if (care->output == NULL) {
-		notice(tracee, ERROR, INTERNAL,
+		note(tracee, ERROR, INTERNAL,
 			"can't generate a valid output name from the current time, "
 			"please specify an ouput name explicitly");
 		return;
@@ -142,13 +151,13 @@ static int generate_care(Extension *extension, const Options *options)
 	else
 		generate_output_name(tracee, care);
 	if (care->output == NULL) {
-		notice(tracee, WARNING, INTERNAL, "can't get output name");
+		note(tracee, WARNING, INTERNAL, "can't get output name");
 		return -1;
 	}
 
 	care->initial_cwd = talloc_strdup(care, tracee->fs->cwd);
 	if (care->initial_cwd == NULL) {
-		notice(tracee, WARNING, INTERNAL, "can't allocate cwd");
+		note(tracee, WARNING, INTERNAL, "can't allocate cwd");
 		return -1;
 	}
 
@@ -157,14 +166,14 @@ static int generate_care(Extension *extension, const Options *options)
 		return -1;
 
 	cursor = strrchr(care->output, '/');
-	if (cursor != NULL)
-		cursor++;
-	else
+	if (cursor == NULL || strlen(cursor) == 1)
 		cursor = care->output;
+	else
+		cursor++;
 
 	care->prefix = talloc_strndup(care, cursor, strlen(cursor) - suffix_length);
 	if (care->prefix == NULL) {
-		notice(tracee, WARNING, INTERNAL, "can't allocate archive prefix");
+		note(tracee, WARNING, INTERNAL, "can't allocate archive prefix");
 		return -1;
 	}
 
@@ -180,6 +189,25 @@ static int generate_care(Extension *extension, const Options *options)
 			status = canonicalize(tracee, (const char *) item->load, false, path, 0);
 			if (status < 0)
 				continue;
+
+			/* Sanity check.  */
+			if (strcmp(path, "/") == 0) {
+				const char *string;
+				const char *name;
+
+				name = talloc_get_name(item);
+				string = name == NULL || name[0] != '$'
+					? talloc_asprintf(tracee->ctx, "'%s'",
+							(const char *) item->load)
+					: talloc_asprintf(tracee->ctx, "'%s' (%s)",
+							(const char *) item->load, name);
+
+				note(tracee, WARNING, USER,
+					"path %s was declared volatile but it leads to '/', "
+					"as a consequence it will *not* be considered volatile.",
+					string);
+				continue;
+			}
 
 			item2 = queue_item(care, &care->volatile_paths, path);
 			if (item2 == NULL)
@@ -289,13 +317,13 @@ static void handle_host_path(Extension *extension, const char *path)
 
 	entry = talloc_zero(care, Entry);
 	if (entry == NULL) {
-		notice(tracee, WARNING, INTERNAL, "can't allocate entry for '%s'", path);
+		note(tracee, WARNING, INTERNAL, "can't allocate entry for '%s'", path);
 		return;
 	}
 
 	entry->path = talloc_strdup(entry, path);
 	if (entry->path == NULL) {
-		notice(tracee, WARNING, INTERNAL, "can't allocate name for '%s'", path);
+		note(tracee, WARNING, INTERNAL, "can't allocate name for '%s'", path);
 		return;
 	}
 
@@ -321,12 +349,12 @@ static void handle_host_path(Extension *extension, const char *path)
 			if (item != NULL)
 				VERBOSE(tracee, 0, "volatile path: %s", path);
 			else
-				notice(tracee, WARNING, USER,
+				note(tracee, WARNING, USER,
 					"can't declare '%s' (fifo or socket) as volatile", path);
 			return;
 		}
 		else
-			notice(tracee, WARNING, USER,
+			note(tracee, WARNING, USER,
 				"'%1$s' might be explicitely declared volatile (-p %1$s)", path);
 	}
 
@@ -359,7 +387,7 @@ static void handle_host_path(Extension *extension, const char *path)
 	}
 
 	if (care->max_size >= 0 && statl.st_size > care->max_size) {
-		notice(tracee, WARNING, USER,
+		note(tracee, WARNING, USER,
 			"file '%s' is archived with a null size since it is bigger than %"
 			PRIi64 "MB, you can specify an alternate limit with the option -m.",
 			path, care->max_size / 1024 / 1024);
@@ -367,10 +395,11 @@ static void handle_host_path(Extension *extension, const char *path)
 	}
 
 	/* Format the location within the archive.  */
+	location = NULL;
 	assert(path[0] == '/');
 	location = talloc_asprintf(tracee->ctx, "%s/rootfs%s", care->prefix, path);
 	if (location == NULL) {
-		notice(tracee, WARNING, INTERNAL, "can't allocate location for '%s'", path);
+		note(tracee, WARNING, INTERNAL, "can't allocate location for '%s'", path);
 		return;
 	}
 
@@ -456,24 +485,56 @@ static void handle_getdents(Tracee *tracee, bool is_new_getdents)
 			size = new_dirent.size;
 		}
 		if (status < 0) {
-			notice(tracee, WARNING, INTERNAL, "can't read dentry");
+			note(tracee, WARNING, INTERNAL, "can't read dentry");
 			break;
 		}
 
 		status = read_string(tracee, component, address + name_offset, PATH_MAX);
 		if (status < 0 || status >= PATH_MAX) {
-			notice(tracee, WARNING, INTERNAL, "can't read dentry" );
+			note(tracee, WARNING, INTERNAL, "can't read dentry" );
 			goto next;
 		}
 
 		/* Archive through the host_path notification. */
+		strcpy(path, "/");
 		translate_path(tracee, path, fd, component, false);
 	next:
 		offset += size;
 	}
 
 	if (offset != result)
-		notice(tracee, WARNING, INTERNAL, "dentry table out of sync.");
+		note(tracee, WARNING, INTERNAL, "dentry table out of sync.");
+}
+
+/**
+ * Set AT_HWCAP to 0 to ensure no processor specific extensions will
+ * be used, for the sake of reproducibility across different CPUs.
+ * This function assumes the "argv, envp, auxv" stuff is pointed to by
+ * @tracee's stack pointer, as expected right after a successful call
+ * to execve(2).
+ */
+static int adjust_elf_auxv(Tracee *tracee)
+{
+	ElfAuxVector *vectors;
+	ElfAuxVector *vector;
+	word_t vectors_address;
+
+	vectors_address = get_elf_aux_vectors_address(tracee);
+	if (vectors_address == 0)
+		return 0;
+
+	vectors = fetch_elf_aux_vectors(tracee, vectors_address);
+	if (vectors == NULL)
+		return 0;
+
+	for (vector = vectors; vector->type != AT_NULL; vector++) {
+		if (vector->type == AT_HWCAP)
+			vector->value = 0;
+	}
+
+	push_elf_aux_vectors(tracee, vectors, vectors_address);
+
+	return 0;
 }
 
 /* List of syscalls handled by this extensions.  */
@@ -521,6 +582,16 @@ int care_callback(Extension *extension, ExtensionEvent event,
 		case PR_getdents64:
 			handle_getdents(tracee, true);
 			break;
+
+		case PR_execve: {
+			word_t result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
+
+			/* Note: this can be done only before PRoot pushes the
+			 * load script into tracee's stack.  */
+			if ((int) result >= 0)
+				adjust_elf_auxv(tracee);
+			break;
+		}
 
 		default:
 			break;

@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2013 STMicroelectronics
+ * Copyright (C) 2014 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -28,6 +28,7 @@
 #include <unistd.h>    /* access(2), lstat(2), */
 #include <string.h>    /* string(3), */
 #include <assert.h>    /* assert(3), */
+#include <stdio.h>     /* sscanf(3), */
 
 #include "path/canon.h"
 #include "path/path.h"
@@ -37,13 +38,101 @@
 #include "extension/extension.h"
 
 /**
+ * Put an end-of-string ('\0') right before the last component of @path.
+ */
+static inline void pop_component(char *path)
+{
+	int offset;
+
+	/* Sanity checks. */
+	assert(path != NULL);
+
+	offset = strlen(path) - 1;
+	assert(offset >= 0);
+
+	/* Don't pop over "/", it doesn't mean anything. */
+	if (offset == 0) {
+		assert(path[0] == '/' && path[1] == '\0');
+		return;
+	}
+
+	/* Skip trailing path separators. */
+	while (offset > 1 && path[offset] == '/')
+		offset--;
+
+	/* Search for the previous path separator. */
+	while (offset > 1 && path[offset] != '/')
+		offset--;
+
+	/* Cut the end of the string before the last component. */
+	path[offset] = '\0';
+	assert(path[0] == '/');
+}
+
+/**
+ * Copy in @component the first path component pointed to by @cursor,
+ * this later is updated to point to the next component for a further
+ * call. This function returns:
+ *
+ *     - -errno if an error occured.
+ *
+ *     - FINAL_SLASH if it the last component of the path but we
+ *       really expect a directory.
+ *
+ *     - FINAL_NORMAL if it the last component of the path.
+ *
+ *     - 0 otherwise.
+ */
+static inline Finality next_component(char component[NAME_MAX], const char **cursor)
+{
+	const char *start;
+	ptrdiff_t length;
+	bool want_dir;
+
+	/* Sanity checks. */
+	assert(component != NULL);
+	assert(cursor    != NULL);
+
+	/* Skip leading path separators. */
+	while (**cursor != '\0' && **cursor == '/')
+		(*cursor)++;
+
+	/* Find the next component. */
+	start = *cursor;
+	while (**cursor != '\0' && **cursor != '/')
+		(*cursor)++;
+	length = *cursor - start;
+
+	if (length >= NAME_MAX)
+		return -ENAMETOOLONG;
+
+	/* Extract the component. */
+	strncpy(component, start, length);
+	component[length] = '\0';
+
+	/* Check if a [link to a] directory is expected. */
+	want_dir = (**cursor == '/');
+
+	/* Skip trailing path separators. */
+	while (**cursor != '\0' && **cursor == '/')
+		(*cursor)++;
+
+	if (**cursor == '\0')
+		return (want_dir
+			? FINAL_SLASH
+			: FINAL_NORMAL);
+
+	return NOT_FINAL;
+}
+
+/**
  * Resolve bindings (if any) in @guest_path and copy the translated
  * path into @host_path.  Also, this function checks that a non-final
  * component is either a directory (returned value is 0) or a symlink
  * (returned value is 1), otherwise it returns -errno (-ENOENT or
  * -ENOTDIR).
  */
-static inline int substitute_binding_stat(Tracee *tracee, Finality is_final,
+static inline int substitute_binding_stat(Tracee *tracee, Finality finality,
 					const char guest_path[PATH_MAX], char host_path[PATH_MAX])
 {
 	struct stat statl;
@@ -56,7 +145,7 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality is_final,
 
 	/* Don't notify extensions during the initialization of a binding.  */
 	if (tracee->glue_type == 0) {
-		status = notify_extensions(tracee, HOST_PATH, (intptr_t)host_path, is_final);
+		status = notify_extensions(tracee, HOST_PATH, (intptr_t)host_path, finality);
 		if (status < 0)
 			return status;
 	}
@@ -67,7 +156,7 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality is_final,
 	/* Build the glue between the hostfs and the guestfs during
 	 * the initialization of a binding.  */
 	if (status < 0 && tracee->glue_type != 0) {
-		statl.st_mode = build_glue(tracee, guest_path, host_path, is_final);
+		statl.st_mode = build_glue(tracee, guest_path, host_path, finality);
 		if (statl.st_mode == 0)
 			status = -1;
 	}
@@ -76,7 +165,7 @@ static inline int substitute_binding_stat(Tracee *tracee, Finality is_final,
 	 * directory nor a symlink.  The error is "No such
 	 * file or directory" if this component doesn't exist,
 	 * otherwise the error is "Not a directory".  */
-	if (!is_final && !S_ISDIR(statl.st_mode) && !S_ISLNK(statl.st_mode))
+	if (!IS_FINAL(finality) && !S_ISDIR(statl.st_mode) && !S_ISLNK(statl.st_mode))
 		return (status < 0 ? -ENOENT : -ENOTDIR);
 
 	return (S_ISLNK(statl.st_mode) ? 1 : 0);
@@ -96,7 +185,7 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 		 char guest_path[PATH_MAX], unsigned int recursion_level)
 {
 	char scratch_path[PATH_MAX];
-	Finality is_final;
+	Finality finality;
 	const char *cursor;
 	int status;
 
@@ -123,27 +212,27 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 
 	/* Canonicalize recursely 'user_path' into 'guest_path'.  */
 	cursor = user_path;
-	is_final = NOT_FINAL;
-	while (!is_final) {
+	finality = NOT_FINAL;
+	while (!IS_FINAL(finality)) {
 		Comparison comparison;
 		char component[NAME_MAX];
 		char host_path[PATH_MAX];
 
-		is_final = next_component(component, &cursor);
-		status = (int) is_final;
+		finality = next_component(component, &cursor);
+		status = (int) finality;
 		if (status < 0)
 			return status;
 
 		if (strcmp(component, ".") == 0) {
-			if (is_final)
-				is_final = FINAL_DOT;
+			if (IS_FINAL(finality))
+				finality = FINAL_DOT;
 			continue;
 		}
 
 		if (strcmp(component, "..") == 0) {
 			pop_component(guest_path);
-			if (is_final)
-				is_final = FINAL_SLASH;
+			if (IS_FINAL(finality))
+				finality = FINAL_SLASH;
 			continue;
 		}
 
@@ -156,7 +245,7 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 		 * symlink.  For this latter case, we check that the
 		 * symlink points to a directory once it is
 		 * canonicalized, at the end of this loop.  */
-		status = substitute_binding_stat(tracee, is_final, scratch_path, host_path);
+		status = substitute_binding_stat(tracee, finality, scratch_path, host_path);
 		if (status < 0)
 			return status;
 
@@ -166,7 +255,7 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 		 * later condition does not apply to intermediate path
 		 * components.  Errors are explicitly ignored since
 		 * they should be handled by the caller. */
-		if (status <= 0 || (is_final == FINAL_NORMAL && !deref_final)) {
+		if (status <= 0 || (finality == FINAL_NORMAL && !deref_final)) {
 			strcpy(scratch_path, guest_path);
 			status = join_paths(2, guest_path, scratch_path, component);
 			if (status < 0)
@@ -195,7 +284,7 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 			case DONT_CANONICALIZE:
 				/* If and only very final, this symlink
 				 * shouldn't be dereferenced nor canonicalized.  */
-				if (is_final == FINAL_NORMAL && recursion_level == 0) {
+				if (finality == FINAL_NORMAL) {
 					strcpy(guest_path, scratch_path);
 					return 0;
 				}
@@ -234,12 +323,13 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 
 		/* Check that a non-final canonicalized/dereferenced
 		 * symlink exists and is a directory.  */
-		status = substitute_binding_stat(tracee, is_final, guest_path, host_path);
+		status = substitute_binding_stat(tracee, finality, guest_path, host_path);
 		if (status < 0)
 			return status;
 
-		/* Here, 'guest_path' shouldn't be a symlink anymore.  */
-		assert(status != 1);
+		/* Here, 'guest_path' shouldn't be a symlink anymore,
+		 * unless it is a named file descriptor.  */
+		assert(status != 1 || sscanf(guest_path, "/proc/%*d/fd/%d", &status) == 1);
 	}
 
 	/* At the exit stage of the first level of recursion,
@@ -247,7 +337,7 @@ int canonicalize(Tracee *tracee, const char *user_path, bool deref_final,
 	 * or a terminating '.' may be required to keep the initial
 	 * semantic of `user_path`.  */
 	if (recursion_level == 0) {
-		switch (is_final) {
+		switch (finality) {
 		case FINAL_NORMAL:
 			break;
 

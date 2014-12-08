@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2013 STMicroelectronics
+ * Copyright (C) 2014 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -37,7 +37,6 @@
 #include <string.h>        /* memcpy(3), */
 #include <stddef.h>        /* offsetof(3), */
 #include <stdint.h>        /* uint*_t, UINT*_MAX, */
-#include <talloc.h>        /* talloc_*, */
 #include <assert.h>        /* assert(3), */
 
 #include "syscall/seccomp.h"
@@ -45,7 +44,7 @@
 #include "syscall/syscall.h"
 #include "syscall/sysnum.h"
 #include "extension/extension.h"
-#include "cli/notice.h"
+#include "cli/note.h"
 
 #include "compat.h"
 #include "attribute.h"
@@ -234,8 +233,7 @@ static int finalize_program_filter(struct sock_fprog *program)
  */
 static void free_program_filter(struct sock_fprog *program)
 {
-	if (program->filter != NULL)
-		TALLOC_FREE(program->filter);
+	TALLOC_FREE(program->filter);
 	program->len = 0;
 }
 
@@ -379,15 +377,14 @@ static FilteredSysnum proot_sysnums[] = {
 	{ PR_open,		0 },
 	{ PR_openat,		0 },
 	{ PR_pivot_root,	0 },
+	{ PR_ptrace,		FILTER_SYSEXIT },
 	{ PR_readlink,		FILTER_SYSEXIT },
 	{ PR_readlinkat,	FILTER_SYSEXIT },
 	{ PR_removexattr,	0 },
 	{ PR_rename,		FILTER_SYSEXIT },
 	{ PR_renameat,		FILTER_SYSEXIT },
 	{ PR_rmdir,		0 },
-	{ PR_rt_sigreturn,	FILTER_SYSEXIT },
 	{ PR_setxattr,		0 },
-	{ PR_sigreturn,		FILTER_SYSEXIT },
 	{ PR_socketcall,	FILTER_SYSEXIT },
 	{ PR_stat,		0 },
 	{ PR_stat64,		0 },
@@ -408,6 +405,8 @@ static FilteredSysnum proot_sysnums[] = {
 	{ PR_utime,		0 },
 	{ PR_utimensat,		0 },
 	{ PR_utimes,		0 },
+	{ PR_wait4,		FILTER_SYSEXIT },
+	{ PR_waitpid,		FILTER_SYSEXIT },
 	FILTERED_SYSNUM_END,
 };
 

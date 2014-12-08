@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2013 STMicroelectronics
+ * Copyright (C) 2014 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -24,8 +24,29 @@
 #define COMPAT_H
 
 /* Local definitions for compatibility with old and/or broken distros... */
+#    ifndef AT_NULL
+#        define AT_NULL			0
+#    endif
+#    ifndef AT_PHDR
+#        define AT_PHDR			3
+#    endif
+#    ifndef AT_PHENT
+#        define AT_PHENT		4
+#    endif
+#    ifndef AT_PHNUM
+#        define AT_PHNUM		5
+#    endif
+#    ifndef AT_BASE
+#        define AT_BASE			7
+#    endif
+#    ifndef AT_ENTRY
+#        define AT_ENTRY		9
+#    endif
 #    ifndef AT_RANDOM
 #        define AT_RANDOM		25
+#    endif
+#    ifndef AT_EXECFN
+#        define AT_EXECFN		31
 #    endif
 #    ifndef AT_SYSINFO
 #        define AT_SYSINFO		32
@@ -51,11 +72,44 @@
 #    ifndef WIFCONTINUED
 #        define WIFCONTINUED(status)	((status) == 0xffff)
 #    endif
+#    ifndef PTRACE_GETREGS
+#        define PTRACE_GETREGS		12
+#    endif
+#    ifndef PTRACE_SETREGS
+#        define PTRACE_SETREGS		13
+#    endif
+#    ifndef PTRACE_GETFPREGS
+#        define PTRACE_GETFPREGS	14
+#    endif
+#    ifndef PTRACE_SETFPREGS
+#        define PTRACE_SETFPREGS	15
+#    endif
+#    ifndef PTRACE_GETFPXREGS
+#        define PTRACE_GETFPXREGS	18
+#    endif
+#    ifndef PTRACE_SETFPXREGS
+#        define PTRACE_SETFPXREGS	19
+#    endif
 #    ifndef PTRACE_SETOPTIONS
 #        define PTRACE_SETOPTIONS	0x4200
 #    endif
 #    ifndef PTRACE_GETEVENTMSG
 #        define PTRACE_GETEVENTMSG	0x4201
+#    endif
+#    ifndef PTRACE_GETREGSET
+#        define PTRACE_GETREGSET	0x4204
+#    endif
+#    ifndef PTRACE_SETREGSET
+#        define PTRACE_SETREGSET	0x4205
+#    endif
+#    ifndef PTRACE_SEIZE
+#        define PTRACE_SEIZE		0x4206
+#    endif
+#    ifndef PTRACE_INTERRUPT
+#        define PTRACE_INTERRUPT	0x4207
+#    endif
+#    ifndef PTRACE_LISTEN
+#        define PTRACE_LISTEN		0x4208
 #    endif
 #    ifndef PTRACE_O_TRACESYSGOOD
 #        define PTRACE_O_TRACESYSGOOD	0x00000001
@@ -114,6 +168,18 @@
 #    ifndef PTRACE_SET_SYSCALL
 #        define PTRACE_SET_SYSCALL	23
 #    endif
+#    ifndef PTRACE_GET_THREAD_AREA
+#        define PTRACE_GET_THREAD_AREA	25
+#    endif
+#    ifndef PTRACE_SET_THREAD_AREA
+#        define PTRACE_SET_THREAD_AREA	26
+#    endif
+#    ifndef PTRACE_GETVFPREGS
+#        define PTRACE_GETVFPREGS	27
+#    endif
+#    ifndef PTRACE_SINGLEBLOCK
+#        define PTRACE_SINGLEBLOCK	33
+#    endif
 #    ifndef ADDR_NO_RANDOMIZE
 #        define ADDR_NO_RANDOMIZE	0x0040000
 #    endif
@@ -135,9 +201,6 @@
 #    ifndef talloc_get_type_abort
 #        define talloc_get_type_abort talloc_get_type
 #    endif
-#    ifndef MAP_32BIT
-#        define MAP_32BIT 0
-#    endif
 #    ifndef FUTEX_PRIVATE_FLAG
 #        define FUTEX_PRIVATE_FLAG	128
 #    endif
@@ -147,7 +210,20 @@
 #    ifndef F_DUPFD_CLOEXEC
 #        define F_DUPFD_CLOEXEC		1030
 #    endif
+#    ifndef O_RDONLY
+#        define O_RDONLY		00000000
+#    endif
 #    ifndef O_CLOEXEC
 #        define O_CLOEXEC		02000000
 #    endif
+#    ifndef MAP_PRIVATE
+#        define MAP_PRIVATE			0x02
+#    endif
+#    ifndef MAP_FIXED
+#        define MAP_FIXED			0x10
+#    endif
+#    ifndef MAP_ANONYMOUS
+#        define MAP_ANONYMOUS			0x20
+#    endif
+
 #endif /* COMPAT_H */

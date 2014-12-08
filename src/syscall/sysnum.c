@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2013 STMicroelectronics
+ * Copyright (C) 2014 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -27,7 +27,7 @@
 #include "tracee/abi.h"
 #include "tracee/reg.h"
 #include "arch.h"
-#include "cli/notice.h"
+#include "cli/note.h"
 
 #include SYSNUMS_HEADER1
 

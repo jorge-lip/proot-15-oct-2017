@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2013 STMicroelectronics
+ * Copyright (C) 2014 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -34,7 +34,7 @@ extern void translate_brk_exit(Tracee *tracee);
  */
 static inline bool belongs_to_heap_prealloc(const Tracee *tracee, word_t address)
 {
-	return (tracee->heap != NULL
+	return (tracee->heap != NULL && !tracee->heap->disabled
 		&& address >= tracee->heap->base + tracee->heap->size
 		&& address < tracee->heap->base + tracee->heap->prealloc_size);
 }

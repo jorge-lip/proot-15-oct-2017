@@ -2,7 +2,7 @@
  *
  * This file is part of PRoot.
  *
- * Copyright (C) 2013 STMicroelectronics
+ * Copyright (C) 2014 STMicroelectronics
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -25,7 +25,7 @@
 
 #include <sys/types.h> /* pid_t, size_t, */
 #include <sys/user.h>  /* struct user*, */
-#include <stdbool.h>
+#include <stdbool.h>   /* bool,  */
 #include <sys/queue.h> /* LIST_*, */
 #include <sys/ptrace.h>/* enum __ptrace_request */
 #include <talloc.h>    /* talloc_*, */
@@ -41,7 +41,9 @@ typedef enum {
 } RegVersion;
 
 struct bindings;
+struct load_info;
 struct extensions;
+struct direct_ptracees;
 struct chained_syscalls;
 
 /* Information related to a file-system name-space.  */
@@ -66,6 +68,7 @@ typedef struct {
 	word_t base;
 	size_t size;
 	size_t prealloc_size;
+	bool disabled;
 } Heap;
 
 /* Information related to a tracee process. */
@@ -80,11 +83,60 @@ typedef struct tracee {
 	/* Process identifier. */
 	pid_t pid;
 
+	/* Is it currently running or not?  */
+	bool running;
+
+	/* Parent of this tracee, NULL if none.  */
+	struct tracee *parent;
+
+	/* Is it a "clone", i.e has the same parent as its creator.  */
+	bool clone;
+
+	/* Support for ptrace emulation (tracer side).  */
+	struct {
+		size_t nb_ptracees;
+		LIST_HEAD(zombies, tracee) zombies;
+
+		struct direct_ptracees *direct_ptracees;
+
+		pid_t wait_pid;
+		word_t wait_options;
+
+		enum {
+			DOESNT_WAIT = 0,
+			WAITS_IN_KERNEL,
+			WAITS_IN_PROOT
+		} waits_in;
+	} as_ptracer;
+
+	/* Support for ptrace emulation (tracee side).  */
+	struct {
+		struct tracee *ptracer;
+
+		struct {
+			#define STRUCT_EVENT struct { int value; bool pending; }
+
+			STRUCT_EVENT proot;
+			STRUCT_EVENT ptracer;
+		} event4;
+
+		bool tracing_started;
+		bool ignore_loader_syscalls;
+		bool ignore_syscalls;
+		word_t options;
+		bool is_zombie;
+	} as_ptracee;
+
 	/* Current status:
 	 *        0: enter syscall
 	 *        1: exit syscall no error
 	 *   -errno: exit syscall with error.  */
 	int status;
+
+#define IS_IN_SYSENTER(tracee) ((tracee)->status == 0)
+#define IS_IN_SYSEXIT(tracee) (!IS_IN_SYSENTER(tracee))
+#define IS_IN_SYSEXIT2(tracee, sysnum) (IS_IN_SYSEXIT(tracee) \
+				     && get_sysnum((tracee), ORIGINAL) == sysnum)
 
 	/* How this tracee is restarted.  */
 	enum __ptrace_request restart_how;
@@ -105,6 +157,13 @@ typedef struct tracee {
 	 * allocations.  */
 	TALLOC_CTX *ctx;
 
+	/* Context used to collect all dynamic memory allocations that
+	 * should be released once this tracee is freed.  */
+	TALLOC_CTX *life_context;
+
+	/* Note: I could rename "ctx" in "event_span" and
+	 * "life_context" in "life_span".  */
+
 	/* Specify the type of the final component during the
 	 * initialization of a binding.  This variable is first
 	 * defined in bind_path() then used in build_glue().  */
@@ -123,8 +182,27 @@ typedef struct tracee {
 	 * syscall.  */
 	struct {
 		struct chained_syscalls *syscalls;
+		bool force_final_result;
 		word_t final_result;
 	} chain;
+
+	/* Load info generated during execve sysenter and used during
+	 * execve sysexit.  */
+	struct load_info *load_info;
+
+	/* Current state of the loading process.  */
+	struct {
+		enum {
+			LOADING_STEP_NONE = 0,
+			LOADING_STEP_OPEN,
+			LOADING_STEP_MMAP,
+			LOADING_STEP_CLOSE
+		} step;
+
+		struct load_info *info;
+		size_t index;
+	} loading;
+
 
 	/**********************************************************************
 	 * Private but inherited resources                                    *
@@ -150,15 +228,13 @@ typedef struct tracee {
 	/* Virtual heap, emulated with a regular memory mapping.  */
 	Heap *heap;
 
+
 	/**********************************************************************
 	 * Shared resources until the tracee makes a call to execve().        *
 	 **********************************************************************/
 
 	/* Path to the executable, à la /proc/self/exe.  */
 	char *exe;
-
-	/* Initial command-line, à la /proc/self/cmdline.  */
-	char **cmdline;
 
 
 	/**********************************************************************
@@ -168,11 +244,8 @@ typedef struct tracee {
 	/* Runner command-line.  */
 	char **qemu;
 
-	/* Can the ELF interpreter for QEMU be safely skipped?  */
-	bool qemu_pie_workaround;
-
 	/* Path to glue between the guest rootfs and the host rootfs.  */
-	char *glue;
+	const char *glue;
 
 	/* List of extensions enabled for this tracee.  */
 	struct extensions *extensions;
@@ -199,9 +272,12 @@ typedef struct tracee {
 #define TRACEE(a) talloc_get_type_abort(talloc_parent(talloc_parent(a)), Tracee)
 
 extern Tracee *get_tracee(const Tracee *tracee, pid_t pid, bool create);
+extern Tracee *get_stopped_ptracee(const Tracee *ptracer, pid_t pid,
+				bool only_with_pevent, word_t wait_options);
+extern bool has_ptracees(const Tracee *ptracer, pid_t pid, word_t wait_options);
 extern int new_child(Tracee *parent, word_t clone_flags);
+extern Tracee *new_dummy_tracee(TALLOC_CTX *context);
 extern int swap_config(Tracee *tracee1, Tracee *tracee2);
-extern int parse_config(Tracee *tracee, size_t argc, char *argv[]);
 extern void kill_all_tracees();
 
 #endif /* TRACEE_H */
