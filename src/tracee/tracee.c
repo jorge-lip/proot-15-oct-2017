@@ -54,11 +54,6 @@ static Tracees tracees;
  */
 static int remove_zombie(Tracee *zombie)
 {
-	Tracee *ptracer;
-
-	ptracer = talloc_get_type_abort(talloc_parent(zombie), Tracee);
-	PTRACER.nb_ptracees--;
-
 	LIST_REMOVE(zombie, link);
 	return 0;
 }
@@ -90,7 +85,6 @@ static int remove_tracee(Tracee *tracee)
 {
 	Tracee *relative;
 	Tracee *ptracer;
-	int status;
 	int event;
 
 	LIST_REMOVE(tracee, link);
@@ -130,10 +124,6 @@ static int remove_tracee(Tracee *tracee)
 	if (ptracer == NULL)
 		return 0;
 
-	/* Sanity checks.  */
-	assert(ptracer != tracee);
-	assert(PTRACER.nb_ptracees > 0);
-
 	/* Zombify this ptracee until its ptracer is notified about
 	 * its death.  */
 	event = tracee->as_ptracee.event4.ptracer.value;
@@ -146,29 +136,31 @@ static int remove_tracee(Tracee *tracee)
 			LIST_INSERT_HEAD(&PTRACER.zombies, zombie, link);
 			talloc_set_destructor(zombie, remove_zombie);
 
+			zombie->parent = tracee->parent;
+			zombie->clone = tracee->clone;
+			zombie->pid = tracee->pid;
+
+			detach_from_ptracer(tracee);
+			attach_to_ptracer(zombie, ptracer);
+
 			zombie->as_ptracee.event4.ptracer.pending = true;
 			zombie->as_ptracee.event4.ptracer.value = event;
 			zombie->as_ptracee.is_zombie = true;
-			zombie->clone = tracee->clone;
-			zombie->pid = tracee->pid;
 
 			return 0;
 		}
 		/* Fallback to the common path.  */
 	}
 
+	detach_from_ptracer(tracee);
+
 	/* Wake its ptracer if there's nothing else to wait for.  */
-	PTRACER.nb_ptracees--;
 	if (PTRACER.nb_ptracees == 0 && PTRACER.wait_pid != 0) {
 		/* Update the return value of ptracer's wait(2).  */
 		poke_reg(ptracer, SYSARG_RESULT, -ECHILD);
 
 		/* Don't forget to write its register cache back.  */
-		status = push_regs(ptracer);
-		if (status < 0) {
-			TALLOC_FREE(ptracer);
-			return 0;
-		}
+		(void) push_regs(ptracer);
 
 		PTRACER.wait_pid = 0;
 		(void) restart_tracee(ptracer, 0);
@@ -344,6 +336,24 @@ Tracee *get_tracee(const Tracee *current_tracee, pid_t pid, bool create)
 }
 
 /**
+ * Free all tracees marked as terminated.
+ */
+void free_terminated_tracees()
+{
+	Tracee *next;
+
+	/* Items can't be deleted when using LIST_FOREACH.  */
+	next = tracees.lh_first;
+	while (next != NULL) {
+		Tracee *tracee = next;
+		next = tracee->link.le_next;
+
+		if (tracee->terminated)
+			TALLOC_FREE(tracee);
+	}
+}
+
+/**
  * Make new @parent's child inherit from it.  Depending on
  * @clone_flags, some information are copied or shared.  This function
  * returns -errno if an error occured, otherwise 0.
@@ -428,11 +438,17 @@ int new_child(Tracee *parent, word_t clone_flags)
 	 *
 	 * -- clone(2) man-page
 	 */
-	child->clone = ((clone_flags & CLONE_PARENT) != 0);
-	if (child->clone)
+	if ((clone_flags & CLONE_PARENT) != 0)
 		child->parent = parent->parent;
 	else
 		child->parent = parent;
+
+	/* Remember if this child belongs to the same thread group as
+	 * its parent.  This is currently useful for ptrace emulation
+	 * only but it deserves to be extended to support execve(2)
+	 * specificity (ie. when a thread calls execve(2), its pid
+	 * gets replaced by the pid of its thread group leader).  */
+	child->clone = ((clone_flags & CLONE_THREAD) != 0);
 
 	/* Depending on how the new process is created, it may be
 	 * automatically traced by the parent's tracer.  */
@@ -443,9 +459,7 @@ int new_child(Tracee *parent, word_t clone_flags)
 	if (parent->as_ptracee.ptracer != NULL
 	    && (   (ptrace_options & parent->as_ptracee.options) != 0
 		|| (clone_flags & CLONE_PTRACE) != 0)) {
-		Tracee *ptracer = parent->as_ptracee.ptracer;
-		child->as_ptracee.ptracer = ptracer;
-		PTRACER.nb_ptracees++;
+		attach_to_ptracer(child, parent->as_ptracee.ptracer);
 
 		/* All these flags are inheritable, no matter why this
 		 * child is being traced.  */
