@@ -20,6 +20,24 @@
 #define DELETED_SUFFIX " (deleted)"
 
 /**
+ * Copy the contents of the @symlink into @value (nul terminated).
+ * This function returns -errno if an error occured, otherwise 0.
+ */
+static int my_readlink(const char symlink[PATH_MAX], char value[PATH_MAX])
+{
+	ssize_t size;
+
+	size = readlink(symlink, value, PATH_MAX);
+	if (size < 0)
+		return size;
+	if (size >= PATH_MAX)
+		return -ENAMETOOLONG;
+	value[size] = '\0';
+
+	return 0;
+}
+
+/**
  * Move the path pointed to by @tracee's @sysarg to a new location,
  * symlink the original path to this new one, make @tracee's @sysarg
  * point to the new location.  This function returns -errno if an
@@ -57,12 +75,9 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 	/* Check if it is a symbolic link.  */
 	if (S_ISLNK(statl.st_mode)) {
 		/* get name */
-		size = readlink(original, intermediate, PATH_MAX);
+		size = my_readlink(original, intermediate);
 		if (size < 0)
 			return size;
-		if (size >= PATH_MAX)
-			return -ENAMETOOLONG;
-		intermediate[size] = '\0';
 
 		name = strrchr(intermediate, '/');
 		if (name == NULL)
@@ -114,12 +129,9 @@ static int move_and_symlink_path(Tracee *tracee, Reg sysarg)
 			return status;
 	} else {
 		/*Move the original content to new location, by incrementing count at end of path. */
-		size = readlink(intermediate, final, PATH_MAX);
+		size = my_readlink(intermediate, final);
 		if (size < 0)
 			return size;
-		if (size >= PATH_MAX)
-			return -ENAMETOOLONG;
-		final[size] = '\0';
 
 		link_count = atoi(final + strlen(final) - 4);
 		link_count++;
@@ -180,12 +192,9 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 	if (!S_ISLNK(statl.st_mode)) 
 		return 0;
 
-	size = readlink(original, intermediate, PATH_MAX);
+	size = my_readlink(original, intermediate);
 	if (size < 0)
 		return size;
-	if (size >= PATH_MAX)
-		return -ENAMETOOLONG;
-	intermediate[size] = '\0';
 
 	name = strrchr(intermediate, '/');
 	if (name == NULL)
@@ -197,12 +206,9 @@ static int decrement_link_count(Tracee *tracee, Reg sysarg)
 	if (strncmp(name, PREFIX, strlen(PREFIX)) != 0) 
 		return 0;
 
-	size = readlink(intermediate, final, PATH_MAX);
+	size = my_readlink(intermediate, final);
 	if (size < 0)
 		return size;
-	if (size >= PATH_MAX)
-		return -ENAMETOOLONG;
-	final[size] = '\0';
 
 	link_count = atoi(final + strlen(final) - 4);
 	link_count--;
@@ -316,12 +322,9 @@ static int handle_sysexit_end(Tracee *tracee)
 		if (!S_ISLNK(statl.st_mode)) 
 			return 0;
 
-		size = readlink(original, intermediate, PATH_MAX);
+		size = my_readlink(original, intermediate);
 		if (size < 0)
 			return size;
-		if (size >= PATH_MAX)
-			return -ENAMETOOLONG;
-		intermediate[size] = '\0';
 
 		name = strrchr(intermediate, '/');
 		if (name == NULL)
@@ -332,12 +335,9 @@ static int handle_sysexit_end(Tracee *tracee)
 		if (strncmp(name, PREFIX, strlen(PREFIX)) != 0)
 			return 0;
 
-		intermediate_proc: size = readlink(intermediate, final, PATH_MAX);
+		intermediate_proc: size = my_readlink(intermediate, final);
 		if (size < 0)
 			return size;
-		if (size >= PATH_MAX)
-			return -ENAMETOOLONG;
-		final[size] = '\0';
 
 		final_proc: status = lstat(final,&finalStat);
 		if (status < 0) 
