@@ -364,11 +364,52 @@ static int handle_sysexit_end(Tracee *tracee)
 }
 
 /**
+ * When @translated_path is a faked hard-link, replace it with the
+ * point it (internally) points to.
+ */
+static void translated_path(char translated_path[PATH_MAX])
+{
+	char path2[PATH_MAX];
+	char path[PATH_MAX];
+	char *component;
+	int status;
+
+	status = my_readlink(translated_path, path);
+	if (status < 0)
+		return;
+
+	component = strrchr(path, '/');
+	if (component == NULL)
+		return;
+	component++;
+
+	if (strncmp(component, PREFIX, strlen(PREFIX)) != 0)
+		return;
+
+	status = my_readlink(path, path2);
+	if (status < 0)
+		return;
+
+#if 0 /* Sanity check. */
+	component = strrchr(path, '/');
+	if (component == NULL)
+		return;
+	component++;
+
+	if (strncmp(component, PREFIX, strlen(PREFIX)) != 0)
+		return;
+#endif
+
+	strcpy(translated_path, path2);
+	return;
+}
+
+/**
  * Handler for this @extension.  It is triggered each time an @event
  * occurred.  See ExtensionEvent for the meaning of @data1 and @data2.
  */
 int link2symlink_callback(Extension *extension, ExtensionEvent event,
-				  intptr_t data1 UNUSED, intptr_t data2 UNUSED)
+			intptr_t data1, intptr_t data2 UNUSED)
 {
 	int status;
 
@@ -501,6 +542,10 @@ int link2symlink_callback(Extension *extension, ExtensionEvent event,
 	case SYSCALL_EXIT_END: {
 		return handle_sysexit_end(TRACEE(extension));
 	}
+
+	case TRANSLATED_PATH:
+		translated_path((char *) data1);
+		return 0;
 
 	default:
 		return 0;
